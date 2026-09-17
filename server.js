@@ -5,32 +5,33 @@ const yahooFinance = require('yahoo-finance2').default;
 const app = express();
 app.use(cors());
 
-// Suppress non-critical warnings
+// Suppress notices & disable strict validation errors
 yahooFinance.suppressNotices(['yahooSurvey']);
 
-// Simple In-Memory Cache (10 Seconds TTL to reduce rate limits)
+// Simple In-Memory Cache (10 Seconds TTL)
 const dataCache = new Map();
 const CACHE_TTL_MS = 10000;
 
-function getStartDateForInterval(intervalStr) {
-  const now = new Date();
+// Returns a simple YYYY-MM-DD string for Yahoo validation
+function getStartDateString(intervalStr) {
+  const d = new Date();
   switch (intervalStr) {
     case '1m':
-      now.setDate(now.getDate() - 1);
+      d.setDate(d.getDate() - 1);
       break;
     case '5m':
-      now.setDate(now.getDate() - 5);
+      d.setDate(d.getDate() - 5);
       break;
     case '15m':
-      now.setDate(now.getDate() - 15);
+      d.setDate(d.getDate() - 15);
       break;
     case '1d':
-      now.setFullYear(now.getFullYear() - 1);
+      d.setFullYear(d.getFullYear() - 1);
       break;
     default:
-      now.setDate(now.getDate() - 5);
+      d.setDate(d.getDate() - 5);
   }
-  return now;
+  return d.toISOString().split('T')[0]; // Returns "YYYY-MM-DD"
 }
 
 function calculateEMA(data, period) {
@@ -69,15 +70,17 @@ app.get('/api/bars', async (req, res) => {
       return res.json(cachedData.data);
     }
 
-    const period1Date = getStartDateForInterval(interval);
+    // Get strict string date format "YYYY-MM-DD"
+    const period1Str = getStartDateString(interval);
 
-    // Strict Yahoo Finance chart options (ONLY valid keys permitted)
+    // Valid option object accepted by yahoo-finance2 chart()
     const queryOptions = {
-      period1: period1Date,
+      period1: period1Str,
       interval: interval,
     };
 
-    const result = await yahooFinance.chart(formattedSymbol, queryOptions);
+    // Pass module options to bypass strict schema checks
+    const result = await yahooFinance.chart(formattedSymbol, queryOptions, { validateResult: false });
 
     if (!result || !result.quotes || result.quotes.length === 0) {
       return res.status(404).json({ error: 'No data found for the given symbol' });
@@ -102,7 +105,7 @@ app.get('/api/bars', async (req, res) => {
       ema21: ema21Values[index] !== null ? Number(ema21Values[index].toFixed(2)) : undefined,
     }));
 
-    // Cache the response
+    // Save to cache
     dataCache.set(cacheKey, { timestamp: Date.now(), data: finalBars });
 
     res.json(finalBars);
@@ -110,7 +113,7 @@ app.get('/api/bars', async (req, res) => {
   } catch (error) {
     console.error('Yahoo Fetch Error:', error.message);
 
-    // Fallback cache if available
+    // Serve fallback cache if error occurs
     const cacheKey = `${req.query.symbol || 'RELIANCE'}_${req.query.interval || '5m'}`;
     const fallback = dataCache.get(cacheKey);
     if (fallback) return res.json(fallback.data);
