@@ -3,48 +3,38 @@ const cors = require('cors');
 const yahooFinance = require('yahoo-finance2').default;
 
 const app = express();
-
 app.use(cors());
+
 yahooFinance.suppressNotices(['yahooSurvey']);
 
-// Custom Browser Headers to bypass Yahoo IP Blocks
-const CUSTOM_HEADERS = {
-  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-  'Accept-Language': 'en-US,en;q=0.9',
-};
-
-// Simple In-Memory Cache (5 Seconds TTL)
-const dataCache = new Map();
-const CACHE_TTL_MS = 5000; 
-
-function getYahooInterval(intervalStr) {
-  switch (intervalStr) {
-    case '1m': return '1m';
-    case '5m': return '5m';
-    case '15m': return '15m';
-    case '1d': return '1d';
-    default: return '5m';
+// Force yahooFinance to fetch fresh crumbs/cookies
+async function initYahoo() {
+  try {
+    // Setting validation/fetch options
+    yahooFinance.setGlobalConfig({
+      queue: {
+        concurrency: 1,
+        timeout: 10000,
+      },
+    });
+    console.log('Yahoo Finance initialized successfully');
+  } catch (err) {
+    console.error('Yahoo Finance Initialization Error:', err.message);
   }
 }
+initYahoo();
+
+const dataCache = new Map();
+const CACHE_TTL_MS = 10000; // Increased to 10s to minimize outgoing IP rate limits
 
 function getStartDateForInterval(intervalStr) {
   const now = new Date();
   switch (intervalStr) {
-    case '1m':
-      now.setDate(now.getDate() - 1);
-      break;
-    case '5m':
-      now.setDate(now.getDate() - 5);
-      break;
-    case '15m':
-      now.setDate(now.getDate() - 15);
-      break;
-    case '1d':
-      now.setFullYear(now.getFullYear() - 1);
-      break;
-    default:
-      now.setDate(now.getDate() - 5);
+    case '1m': now.setDate(now.getDate() - 1); break;
+    case '5m': now.setDate(now.getDate() - 5); break;
+    case '15m': now.setDate(now.getDate() - 15); break;
+    case '1d': now.setFullYear(now.getFullYear() - 1); break;
+    default: now.setDate(now.getDate() - 5);
   }
   return now;
 }
@@ -80,21 +70,16 @@ app.get('/api/bars', async (req, res) => {
     const cacheKey = `${formattedSymbol}_${interval}`;
     const cachedData = dataCache.get(cacheKey);
 
-    // Return cached response if under 5 seconds old
     if (cachedData && (Date.now() - cachedData.timestamp < CACHE_TTL_MS)) {
       return res.json(cachedData.data);
     }
 
     const period1Date = getStartDateForInterval(interval);
 
-    const queryOptions = {
+    // Call chart directly
+    const result = await yahooFinance.chart(formattedSymbol, {
       period1: period1Date,
-      interval: getYahooInterval(interval),
-    };
-
-    // Pass custom browser headers to bypass rate limits
-    const result = await yahooFinance.chart(formattedSymbol, queryOptions, {
-      headers: CUSTOM_HEADERS
+      interval: interval,
     });
 
     if (!result || !result.quotes || result.quotes.length === 0) {
@@ -120,29 +105,22 @@ app.get('/api/bars', async (req, res) => {
       ema21: ema21Values[index] !== null ? Number(ema21Values[index].toFixed(2)) : undefined,
     }));
 
-    // Store in memory cache
     dataCache.set(cacheKey, { timestamp: Date.now(), data: finalBars });
-
     res.json(finalBars);
-  } catch (error) {
-    console.error('Yahoo Finance Fetch Error:', error.message);
 
-    // Serve stale cache if available when Yahoo throws an error
+  } catch (error) {
+    console.error('Yahoo Fetch Error:', error.message);
+    
+    // Serve fallback cache if block occurs mid-session
     const cacheKey = `${req.query.symbol || 'RELIANCE'}_${req.query.interval || '5m'}`;
-    const fallbackCache = dataCache.get(cacheKey);
-    if (fallbackCache) {
-      return res.json(fallbackCache.data);
-    }
+    const fallback = dataCache.get(cacheKey);
+    if (fallback) return res.json(fallback.data);
 
     res.status(500).json({ error: 'Failed to fetch market data', details: error.message });
   }
 });
 
-app.get('/health', (req, res) => {
-  res.send('Server is active');
-});
+app.get('/health', (req, res) => res.send('Server Active'));
 
 const PORT = process.env.PORT || 4000;
-app.listen(PORT, () => {
-  console.log(`Backend API running on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`Server on port ${PORT}`));
