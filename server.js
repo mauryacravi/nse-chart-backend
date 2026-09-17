@@ -53,9 +53,14 @@ app.get('/api/bars', async (req, res) => {
     const symbolParam = String(rawSymbol || 'RELIANCE').trim();
     const intervalParam = String(rawInterval || '5m').split(']')[0].trim();
 
-    const formattedSymbol = symbolParam.toUpperCase().endsWith('.NS') || symbolParam.toUpperCase().endsWith('.BO')
-      ? symbolParam.toUpperCase()
-      : `${symbolParam.toUpperCase()}.NS`;
+    // Universal symbol formatting (NSE, US Stocks, Forex, and Crypto)
+    const uppercaseSymbol = symbolParam.toUpperCase();
+    const isUSOrCrypto = ['AAPL', 'TSLA', 'NVDA', 'MSFT', 'AMZN', 'GOOGL', 'BTC-USD', 'ETH-USD'].includes(uppercaseSymbol);
+    const hasSuffix = uppercaseSymbol.includes('.') || uppercaseSymbol.includes('-');
+
+    const formattedSymbol = (hasSuffix || isUSOrCrypto) 
+      ? uppercaseSymbol 
+      : `${uppercaseSymbol}.NS`;
 
     const { range, interval } = getRangeAndInterval(intervalParam);
 
