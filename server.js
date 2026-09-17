@@ -7,6 +7,17 @@ const app = express();
 app.use(cors());
 yahooFinance.suppressNotices(['yahooSurvey']);
 
+// Custom Browser Headers to bypass Yahoo IP Blocks
+const CUSTOM_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+  'Accept-Language': 'en-US,en;q=0.9',
+};
+
+// Simple In-Memory Cache (5 Seconds TTL)
+const dataCache = new Map();
+const CACHE_TTL_MS = 5000; 
+
 function getYahooInterval(intervalStr) {
   switch (intervalStr) {
     case '1m': return '1m';
@@ -17,21 +28,20 @@ function getYahooInterval(intervalStr) {
   }
 }
 
-// Helper function to calculate a past Date object for period1
 function getStartDateForInterval(intervalStr) {
   const now = new Date();
   switch (intervalStr) {
     case '1m':
-      now.setDate(now.getDate() - 1); // 1 day back (Yahoo limits 1m data)
+      now.setDate(now.getDate() - 1);
       break;
     case '5m':
-      now.setDate(now.getDate() - 5); // 5 days back
+      now.setDate(now.getDate() - 5);
       break;
     case '15m':
-      now.setDate(now.getDate() - 15); // 15 days back
+      now.setDate(now.getDate() - 15);
       break;
     case '1d':
-      now.setFullYear(now.getFullYear() - 1); // 1 year back
+      now.setFullYear(now.getFullYear() - 1);
       break;
     default:
       now.setDate(now.getDate() - 5);
@@ -67,15 +77,25 @@ app.get('/api/bars', async (req, res) => {
       ? symbol.toUpperCase()
       : `${symbol.toUpperCase()}.NS`;
 
-    // Calculate a valid JS Date object for period1
+    const cacheKey = `${formattedSymbol}_${interval}`;
+    const cachedData = dataCache.get(cacheKey);
+
+    // Return cached response if under 5 seconds old
+    if (cachedData && (Date.now() - cachedData.timestamp < CACHE_TTL_MS)) {
+      return res.json(cachedData.data);
+    }
+
     const period1Date = getStartDateForInterval(interval);
 
     const queryOptions = {
-      period1: period1Date, // Pass valid Date object
+      period1: period1Date,
       interval: getYahooInterval(interval),
     };
 
-    const result = await yahooFinance.chart(formattedSymbol, queryOptions);
+    // Pass custom browser headers to bypass rate limits
+    const result = await yahooFinance.chart(formattedSymbol, queryOptions, {
+      headers: CUSTOM_HEADERS
+    });
 
     if (!result || !result.quotes || result.quotes.length === 0) {
       return res.status(404).json({ error: 'No data found for the given symbol' });
@@ -100,9 +120,20 @@ app.get('/api/bars', async (req, res) => {
       ema21: ema21Values[index] !== null ? Number(ema21Values[index].toFixed(2)) : undefined,
     }));
 
+    // Store in memory cache
+    dataCache.set(cacheKey, { timestamp: Date.now(), data: finalBars });
+
     res.json(finalBars);
   } catch (error) {
     console.error('Yahoo Finance Fetch Error:', error.message);
+
+    // Serve stale cache if available when Yahoo throws an error
+    const cacheKey = `${req.query.symbol || 'RELIANCE'}_${req.query.interval || '5m'}`;
+    const fallbackCache = dataCache.get(cacheKey);
+    if (fallbackCache) {
+      return res.json(fallbackCache.data);
+    }
+
     res.status(500).json({ error: 'Failed to fetch market data', details: error.message });
   }
 });
