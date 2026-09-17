@@ -4,13 +4,9 @@ const yahooFinance = require('yahoo-finance2').default;
 
 const app = express();
 
-// 1. Enable CORS for all origins (allows your Linux site to fetch data)
 app.use(cors());
-
-// Optional: Suppress Yahoo Finance notice logging
 yahooFinance.suppressNotices(['yahooSurvey']);
 
-// Map chart intervals to Yahoo Finance query intervals
 function getYahooInterval(intervalStr) {
   switch (intervalStr) {
     case '1m': return '1m';
@@ -21,18 +17,28 @@ function getYahooInterval(intervalStr) {
   }
 }
 
-// Map chart intervals to historical range periods
-function getYahooRange(intervalStr) {
+// Helper function to calculate a past Date object for period1
+function getStartDateForInterval(intervalStr) {
+  const now = new Date();
   switch (intervalStr) {
-    case '1m': return '1d';   // 1-minute data available for up to 7 days max
-    case '5m': return '5d';
-    case '15m': return '1m';
-    case '1d': return '1y';
-    default: return '5d';
+    case '1m':
+      now.setDate(now.getDate() - 1); // 1 day back (Yahoo limits 1m data)
+      break;
+    case '5m':
+      now.setDate(now.getDate() - 5); // 5 days back
+      break;
+    case '15m':
+      now.setDate(now.getDate() - 15); // 15 days back
+      break;
+    case '1d':
+      now.setFullYear(now.getFullYear() - 1); // 1 year back
+      break;
+    default:
+      now.setDate(now.getDate() - 5);
   }
+  return now;
 }
 
-// 2. Simple EMA Calculation Helper
 function calculateEMA(data, period) {
   const k = 2 / (period + 1);
   let emaArray = new Array(data.length);
@@ -45,7 +51,7 @@ function calculateEMA(data, period) {
       emaArray[i] = null;
     } else if (i === period - 1) {
       sum += close;
-      emaArray[i] = sum / period; // Simple moving average as initial EMA value
+      emaArray[i] = sum / period;
     } else {
       emaArray[i] = (close * k) + (emaArray[i - 1] * (1 - k));
     }
@@ -53,18 +59,19 @@ function calculateEMA(data, period) {
   return emaArray;
 }
 
-// 3. API Endpoint to fetch historical & live candles
 app.get('/api/bars', async (req, res) => {
   try {
     const { symbol = 'RELIANCE', interval = '5m' } = req.query;
 
-    // Append .NS suffix for NSE India symbols if omitted
     const formattedSymbol = symbol.toUpperCase().endsWith('.NS') || symbol.toUpperCase().endsWith('.BO')
       ? symbol.toUpperCase()
       : `${symbol.toUpperCase()}.NS`;
 
+    // Calculate a valid JS Date object for period1
+    const period1Date = getStartDateForInterval(interval);
+
     const queryOptions = {
-      period1: getYahooRange(interval),
+      period1: period1Date, // Pass valid Date object
       interval: getYahooInterval(interval),
     };
 
@@ -74,18 +81,16 @@ app.get('/api/bars', async (req, res) => {
       return res.status(404).json({ error: 'No data found for the given symbol' });
     }
 
-    // Filter valid OHLC values and map timestamps to Unix seconds
     const cleanBars = result.quotes
       .filter(q => q.open != null && q.high != null && q.low != null && q.close != null)
       .map(q => ({
-        time: Math.floor(new Date(q.date).getTime() / 1000), // UTC epoch seconds
+        time: Math.floor(new Date(q.date).getTime() / 1000),
         open: Number(q.open.toFixed(2)),
         high: Number(q.high.toFixed(2)),
         low: Number(q.low.toFixed(2)),
         close: Number(q.close.toFixed(2)),
       }));
 
-    // Calculate technical indicators
     const ema9Values = calculateEMA(cleanBars, 9);
     const ema21Values = calculateEMA(cleanBars, 21);
 
@@ -102,12 +107,10 @@ app.get('/api/bars', async (req, res) => {
   }
 });
 
-// Health check endpoint for Render/Railway monitoring
 app.get('/health', (req, res) => {
   res.send('Server is active');
 });
 
-// 4. Use process.env.PORT provided by deployment hosts (Render, Railway, Heroku)
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => {
   console.log(`Backend API running on port ${PORT}`);
