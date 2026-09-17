@@ -9,7 +9,6 @@ app.use(cors());
 const dataCache = new Map();
 const CACHE_TTL_MS = 10000;
 
-// Convert frontend intervals to Yahoo chart intervals & calculate range
 function getRangeAndInterval(intervalStr) {
   switch (intervalStr) {
     case '1m':
@@ -47,25 +46,26 @@ function calculateEMA(data, period) {
 
 app.get('/api/bars', async (req, res) => {
   try {
-    const symbolParam = (req.query.symbol || 'RELIANCE').trim();
-    // Clean interval param in case markdown formatting leaks into query string
-    const rawInterval = (req.query.interval || '5m').split(']')[0].trim();
+    // Force query params to plain strings safely
+    const rawSymbol = Array.isArray(req.query.symbol) ? req.query.symbol[0] : req.query.symbol;
+    const rawInterval = Array.isArray(req.query.interval) ? req.query.interval[0] : req.query.interval;
+
+    const symbolParam = String(rawSymbol || 'RELIANCE').trim();
+    const intervalParam = String(rawInterval || '5m').split(']')[0].trim();
 
     const formattedSymbol = symbolParam.toUpperCase().endsWith('.NS') || symbolParam.toUpperCase().endsWith('.BO')
       ? symbolParam.toUpperCase()
       : `${symbolParam.toUpperCase()}.NS`;
 
-    const { range, interval } = getRangeAndInterval(rawInterval);
+    const { range, interval } = getRangeAndInterval(intervalParam);
 
     const cacheKey = `${formattedSymbol}_${interval}`;
     const cachedData = dataCache.get(cacheKey);
 
-    // Serve cached response if fresh
     if (cachedData && (Date.now() - cachedData.timestamp < CACHE_TTL_MS)) {
       return res.json(cachedData.data);
     }
 
-    // Direct HTTP request to Yahoo Finance query endpoint
     const url = `https://query1.finance.yahoo.com/v8/finance/chart/${formattedSymbol}?range=${range}&interval=${interval}&includePrePost=false`;
 
     const response = await axios.get(url, {
@@ -107,7 +107,6 @@ app.get('/api/bars', async (req, res) => {
       ema21: ema21Values[index] !== null ? Number(ema21Values[index].toFixed(2)) : undefined,
     }));
 
-    // Cache the response
     dataCache.set(cacheKey, { timestamp: Date.now(), data: finalBars });
 
     res.json(finalBars);
@@ -115,8 +114,7 @@ app.get('/api/bars', async (req, res) => {
   } catch (error) {
     console.error('Fetch Error:', error.message);
 
-    // Fallback to stale cache if request fails
-    const fallbackKey = `${(req.query.symbol || 'RELIANCE').toUpperCase()}.NS_${req.query.interval || '5m'}`;
+    const fallbackKey = `${(req.query.symbol || 'RELIANCE').toString().toUpperCase()}.NS_${req.query.interval || '5m'}`;
     const fallback = dataCache.get(fallbackKey);
     if (fallback) return res.json(fallback.data);
 
