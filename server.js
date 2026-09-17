@@ -53,14 +53,22 @@ app.get('/api/bars', async (req, res) => {
     const symbolParam = String(rawSymbol || 'RELIANCE').trim();
     const intervalParam = String(rawInterval || '5m').split(']')[0].trim();
 
-    // Universal symbol formatting (NSE, US Stocks, Forex, and Crypto)
     const uppercaseSymbol = symbolParam.toUpperCase();
-    const isUSOrCrypto = ['AAPL', 'TSLA', 'NVDA', 'MSFT', 'AMZN', 'GOOGL', 'BTC-USD', 'ETH-USD'].includes(uppercaseSymbol);
-    const hasSuffix = uppercaseSymbol.includes('.') || uppercaseSymbol.includes('-');
 
-    const formattedSymbol = (hasSuffix || isUSOrCrypto) 
-      ? uppercaseSymbol 
-      : `${uppercaseSymbol}.NS`;
+    // Determine target market format dynamically
+    let formattedSymbol = uppercaseSymbol;
+
+    // Check if symbol explicitly defines its market/pair
+    const hasSuffixOrHyphen = uppercaseSymbol.includes('.') || uppercaseSymbol.includes('-');
+
+    if (!hasSuffixOrHyphen) {
+      // Common US single tickers — if not in this list, default to NSE (.NS) for Indian market focus
+      const usTickers = ['AAPL', 'TSLA', 'NVDA', 'MSFT', 'AMZN', 'GOOGL', 'META', 'NFLX', 'AMD', 'SPY', 'QQQ'];
+      
+      if (!usTickers.includes(uppercaseSymbol)) {
+        formattedSymbol = `${uppercaseSymbol}.NS`;
+      }
+    }
 
     const { range, interval } = getRangeAndInterval(intervalParam);
 
